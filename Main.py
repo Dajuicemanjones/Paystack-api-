@@ -4,7 +4,20 @@ import os
 
 app = Flask(__name__)
 
+# Get your secret key from Render environment variables
 PAYSTACK_SECRET_KEY = os.getenv("PAYSTACK_SECRET_KEY")
+
+# Paystack API endpoint
+PAYSTACK_BASE_URL = "https://api.paystack.co/transaction/initialize"
+
+# Example USD to NGN rate fetcher (from exchangerate.host)
+def convert_usd_to_ngn(amount_usd):
+    try:
+        rate_res = requests.get("https://api.exchangerate.host/latest?base=USD&symbols=NGN")
+        rate = rate_res.json()["rates"]["NGN"]
+        return int(amount_usd * rate * 100)  # Paystack wants amount in kobo
+    except:
+        return int(amount_usd * 1600 * 100)  # fallback rate
 
 @app.route('/')
 def home():
@@ -12,42 +25,35 @@ def home():
 
 @app.route('/create-payment', methods=['POST'])
 def create_payment():
-    data = request.get_json()
-    amount_usd = data.get('amount')
+    try:
+        data = request.get_json()
 
-    if not amount_usd:
-        return jsonify({"error": "Amount is required"}), 400
+        if not data or "email" not in data or "amount_usd" not in data:
+            return jsonify({"error": "Please provide email and amount_usd"}), 400
 
-    # Get exchange rate from USD to NGN
-    forex_res = requests.get("https://api.exchangerate-api.com/v4/latest/USD")
-    forex_data = forex_res.json()
-    usd_to_ngn = forex_data["rates"].get("NGN")
+        email = data["email"]
+        amount_usd = float(data["amount_usd"])
+        amount_ngn_kobo = convert_usd_to_ngn(amount_usd)
 
-    if not usd_to_ngn:
-        return jsonify({"error": "Could not fetch exchange rate"}), 500
+        headers = {
+            "Authorization": f"Bearer {PAYSTACK_SECRET_KEY}",
+            "Content-Type": "application/json"
+        }
 
-    amount_ngn = int(amount_usd * usd_to_ngn * 100)  # kobo
+        payload = {
+            "email": email,
+            "amount": amount_ngn_kobo,
+            "currency": "NGN",
+            "callback_url": "https://yourstore.com/payment-success"  # change to your callback
+        }
 
-    headers = {
-        "Authorization": f"Bearer {PAYSTACK_SECRET_KEY}",
-        "Content-Type": "application/json"
-    }
+        response = requests.post(PAYSTACK_BASE_URL, headers=headers, json=payload)
+        return jsonify(response.json())
 
-    payload = {
-        "email": data.get('email'),
-        "amount": amount_ngn,
-        "currency": "NGN"
-    }
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-    response = requests.post(
-        "https://api.paystack.co/transaction/initialize",
-        json=payload,
-        headers=headers
-    )
-
-    return jsonify(response.json())
 
 if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=5000)
-
+    app.run(host='0.0.0.0', port=5000)
 
